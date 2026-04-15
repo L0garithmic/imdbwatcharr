@@ -2,7 +2,7 @@
   "site": {
     "title": "IMDb Watchlist to Radarr RSS",
     "description": "GitHub Pages-hosted RSS feeds generated from public IMDb watchlists and custom lists.",
-    "baseUrl": "https://l0garithmic.github.io/imdbwatch"
+    "baseUrl": "https://l0garithmic.github.io/imdbwatcharr"
   },
   "feeds": [
     {
