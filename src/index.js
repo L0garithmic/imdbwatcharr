@@ -28,6 +28,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getPublicOrigin(request) {
+  return request.headers.get("x-public-origin") || new URL(request.url).origin;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -312,9 +316,10 @@ function renderHomePage(origin) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const publicOrigin = getPublicOrigin(request);
 
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
-      return html(renderHomePage(url.origin));
+      return html(renderHomePage(publicOrigin));
     }
 
     if (request.method === "POST" && url.pathname === "/api/create") {
@@ -337,7 +342,7 @@ export default {
 
         return json({
           slug: feed.slug,
-          feedUrl: `${url.origin}/f/${feed.slug}.xml`,
+          feedUrl: `${publicOrigin}/f/${feed.slug}.xml`,
           status: feed.status,
           itemCount: feed.item_count ?? 0,
           message,
@@ -367,7 +372,7 @@ export default {
         });
       }
 
-      const xml = buildFeedXml(url.origin, feed, items);
+      const xml = buildFeedXml(publicOrigin, feed, items);
       return new Response(xml, {
         headers: {
           "content-type": "application/rss+xml; charset=utf-8",
