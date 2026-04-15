@@ -1,0 +1,22 @@
+{
+  "name": "imdbwatch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "build:sample": "node scripts/build-site.mjs --use-sample",
+    "lint:config": "node scripts/validate-config.mjs",
+    "start": "npx http-server ./dist -p 4173 -c-1"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "playwright": "^1.54.1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

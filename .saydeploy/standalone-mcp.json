@@ -1,0 +1,10 @@
+{
+  "serverName": "saydeploy",
+  "url": "http://127.0.0.1:60129/mcp",
+  "serverKind": "unified",
+  "scopeMode": "workspace",
+  "transportTopology": "single-workspace-host",
+  "workspaceRoot": "d:\\.SystemFiles\\Desktop\\imdbwatch",
+  "workspaceBindingFile": "d:\\.SystemFiles\\Desktop\\imdbwatch\\.saydeploy\\workspace-binding.json",
+  "generatedAt": "2026-04-15T21:01:29.573Z"
+}
