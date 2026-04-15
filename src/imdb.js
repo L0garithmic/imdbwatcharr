@@ -44,6 +44,62 @@ export function normalizeImdbUrl(input) {
   throw new Error("Enter a public IMDb list URL or public watchlist URL.");
 }
 
+export function buildPublicFeedPath(normalized) {
+  if (normalized.sourceKind === "watchlist") {
+    return `/p/${normalized.sourceKey}`;
+  }
+
+  if (normalized.sourceKind === "list") {
+    return `/l/${normalized.sourceKey}`;
+  }
+
+  throw new Error("Unsupported IMDb source type.");
+}
+
+export function getNormalizedFromStoredFeed(feed) {
+  return normalizeImdbUrl(feed.source_url);
+}
+
+export function parseFeedRoute(pathname) {
+  const watchlistMatch = pathname.match(/^\/p\/([a-z0-9._-]+)\/?$/i);
+  if (watchlistMatch) {
+    return {
+      canonicalUrl: `https://www.imdb.com/user/${watchlistMatch[1]}/watchlist/`,
+      sourceKind: "watchlist",
+      sourceKey: watchlistMatch[1],
+    };
+  }
+
+  const listMatch = pathname.match(/^\/l\/(ls\d+)\/?$/i);
+  if (listMatch) {
+    return {
+      canonicalUrl: `https://www.imdb.com/list/${listMatch[1]}/`,
+      sourceKind: "list",
+      sourceKey: listMatch[1],
+    };
+  }
+
+  const genericMatch = pathname.match(/^\/f\/((?:ls\d+)|(?:p\.[a-z0-9._-]+)|(?:ur[a-z0-9._-]+))\/?$/i);
+  if (genericMatch) {
+    const value = genericMatch[1];
+    if (/^ls\d+$/i.test(value)) {
+      return {
+        canonicalUrl: `https://www.imdb.com/list/${value}/`,
+        sourceKind: "list",
+        sourceKey: value,
+      };
+    }
+
+    return {
+      canonicalUrl: `https://www.imdb.com/user/${value}/watchlist/`,
+      sourceKind: "watchlist",
+      sourceKey: value,
+    };
+  }
+
+  return null;
+}
+
 function parseJsonLd(html) {
   const matches = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi)];
   for (const [, rawJson] of matches) {
@@ -177,7 +233,7 @@ export function buildFeedXml(origin, feed, items) {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&apos;");
   const cdata = (value) => `<![CDATA[${String(value).replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
-  const feedUrl = `${origin}/f/${feed.slug}.xml`;
+  const feedUrl = `${origin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed))}`;
   const lastBuildDate = feed.last_synced_at ? new Date(feed.last_synced_at).toUTCString() : new Date().toUTCString();
   const sourceTitle = feed.list_title || "IMDb Feed";
   const description = `${sourceTitle} on IMDb | ${items.length} included`;

@@ -1,5 +1,14 @@
 import { launch } from "@cloudflare/playwright";
-import { buildFeedXml, createStableSlug, filterMovieItems, normalizeImdbUrl, parseImdbHtml } from "./imdb.js";
+import {
+  buildFeedXml,
+  buildPublicFeedPath,
+  createStableSlug,
+  filterMovieItems,
+  getNormalizedFromStoredFeed,
+  normalizeImdbUrl,
+  parseFeedRoute,
+  parseImdbHtml,
+} from "./imdb.js";
 
 const STALE_AFTER_MS = 1000 * 60 * 60 * 6;
 const BROWSER_ATTEMPTS = 3;
@@ -54,6 +63,15 @@ async function getFeedByUrl(db, url) {
   return result ?? null;
 }
 
+async function getOrCreateFeed(db, normalized) {
+  const existing = await getFeedByUrl(db, normalized.canonicalUrl);
+  if (existing) {
+    return existing;
+  }
+
+  return upsertFeed(db, normalized);
+}
+
 async function getFeedItems(db, feedId) {
   const result = await db
     .prepare("SELECT imdb_id, position, title, year, title_type, added_at FROM feed_items WHERE feed_id = ? ORDER BY position ASC")
@@ -63,11 +81,6 @@ async function getFeedItems(db, feedId) {
 }
 
 async function upsertFeed(db, normalized) {
-  const existing = await getFeedByUrl(db, normalized.canonicalUrl);
-  if (existing) {
-    return existing;
-  }
-
   const slug = await createStableSlug(normalized.canonicalUrl);
   const timestamp = nowIso();
   await db
@@ -173,6 +186,23 @@ async function syncFeed(env, feed) {
   throw lastError;
 }
 
+async function ensureFeedIsFresh(env, feed) {
+  const shouldSync = feed.status !== "ready" || isStale(feed);
+  let currentFeed = feed;
+  let message = "Feed is ready.";
+
+  if (shouldSync) {
+    try {
+      currentFeed = await syncFeed(env, feed);
+    } catch (error) {
+      message = error.message;
+      currentFeed = await getFeedByUrl(env.DB, feed.source_url);
+    }
+  }
+
+  return { feed: currentFeed, message };
+}
+
 function renderHomePage(origin) {
   return `<!doctype html>
 <html lang="en">
@@ -266,14 +296,14 @@ function renderHomePage(origin) {
     <section class="panel">
       <p style="margin:0 0 0.7rem;color:var(--accent-ink);font-weight:700;text-transform:uppercase;letter-spacing:0.12em;font-size:0.78rem;">Paste IMDb URL, get RSS URL</p>
       <h1>IMDb watchlist to Radarr RSS.</h1>
-      <p>Paste a public IMDb watchlist or list URL. The Worker fetches it, stores the results, and gives you a stable RSS feed URL you can drop into Radarr.</p>
+      <p>Paste a public IMDb watchlist or list URL. The Worker derives a deterministic RSS URL from the IMDb identifier, fetches the data, and caches the results for refreshes.</p>
       <form id="create-form">
         <input id="source-url" name="sourceUrl" placeholder="https://www.imdb.com/user/ur12345678/watchlist/" required>
         <button type="submit">Create Feed</button>
       </form>
       <div id="result" class="result"></div>
       <div id="error" class="error"></div>
-      <p style="margin-top:1rem;">Feed URLs look like <code>${origin}/f/your-feed.xml</code>.</p>
+      <p style="margin-top:1rem;">Feed URLs look like <code>${origin}/p/profile-id</code> or <code>${origin}/l/ls123456789</code>.</p>
     </section>
   </main>
   <script>
@@ -326,23 +356,13 @@ export default {
       try {
         const payload = await request.json();
         const normalized = normalizeImdbUrl(payload?.sourceUrl ?? "");
-        const existing = await upsertFeed(env.DB, normalized);
-        const shouldSync = existing.status !== "ready" || isStale(existing);
-
-        let feed = existing;
-        let message = "Feed is ready.";
-        if (shouldSync) {
-          try {
-            feed = await syncFeed(env, existing);
-          } catch (error) {
-            message = error.message;
-            feed = await getFeedBySlug(env.DB, existing.slug);
-          }
-        }
+        const existing = await getOrCreateFeed(env.DB, normalized);
+        const { feed, message } = await ensureFeedIsFresh(env, existing);
 
         return json({
           slug: feed.slug,
-          feedUrl: `${publicOrigin}/f/${feed.slug}.xml`,
+          routePath: buildPublicFeedPath(normalized),
+          feedUrl: `${publicOrigin}${buildPublicFeedPath(normalized)}`,
           status: feed.status,
           itemCount: feed.item_count ?? 0,
           message,
@@ -352,15 +372,14 @@ export default {
       }
     }
 
-    const feedMatch = url.pathname.match(/^\/f\/([a-f0-9]{12})\.xml$/);
-    if ((request.method === "GET" || request.method === "HEAD") && feedMatch) {
-      const slug = feedMatch[1];
-      const feed = await getFeedBySlug(env.DB, slug);
-      if (!feed) {
-        return new Response("Feed not found.", { status: 404 });
-      }
+    const normalizedRoute = parseFeedRoute(url.pathname);
+    if ((request.method === "GET" || request.method === "HEAD") && normalizedRoute) {
+      let feed = await getOrCreateFeed(env.DB, normalizedRoute);
 
-      if (isStale(feed) && feed.status !== "syncing") {
+      if (feed.status !== "ready") {
+        const result = await ensureFeedIsFresh(env, feed);
+        feed = result.feed;
+      } else if (isStale(feed) && feed.status !== "syncing") {
         ctx.waitUntil(syncFeed(env, feed).catch(() => {}));
       }
 
@@ -379,6 +398,17 @@ export default {
           "cache-control": "public, max-age=300",
         },
       });
+    }
+
+    const legacyFeedMatch = url.pathname.match(/^\/f\/([a-f0-9]{12})\.xml$/);
+    if ((request.method === "GET" || request.method === "HEAD") && legacyFeedMatch) {
+      const feed = await getFeedBySlug(env.DB, legacyFeedMatch[1]);
+      if (!feed) {
+        return new Response("Feed not found.", { status: 404 });
+      }
+
+      const redirectUrl = `${publicOrigin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed))}`;
+      return Response.redirect(redirectUrl, 302);
     }
 
     const metadataMatch = url.pathname.match(/^\/api\/feeds\/([a-f0-9]{12})$/);
