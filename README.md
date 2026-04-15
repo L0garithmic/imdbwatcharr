@@ -1,55 +1,57 @@
-# IMDb Watchlist to Radarr RSS
+# IMDb Watchlist to Radarr RSS Worker
 
-This project builds static RSS feeds from public IMDb watchlists and public IMDb custom lists, then serves those feeds from GitHub Pages.
+This project is now a Cloudflare Worker app with one simple flow:
 
-The design goal is reliability over cleverness:
+1. Open the site
+2. Paste a public IMDb watchlist or list URL
+3. Get back a stable RSS URL
+4. Use that RSS URL in Radarr's `RSS List`
 
-- It fetches IMDb with a real browser context so AWS WAF bot checks can settle before parsing.
-- It reads `#__NEXT_DATA__` first, which is much less brittle than scraping visible card markup.
-- It keeps HTML and JSON-LD fallbacks in place so small IMDb layout shifts do not break the whole pipeline immediately.
-- It publishes a status page that shows failed feeds instead of silently hiding them.
+## Architecture
 
-## What gets generated
+- Worker app serves the tiny frontend and API
+- D1 stores feeds and feed items
+- Browser Run / Browser Rendering fetches IMDb pages and lets the parser read `#__NEXT_DATA__`
+- RSS is generated dynamically at `GET /f/<slug>.xml`
 
-- `dist/feeds/<feed-id>.xml`: Radarr-friendly RSS feeds
-- `dist/data/feeds.json`: metadata for the GitHub Pages UI
-- `dist/index.html`: a small dashboard for feed links and status
+## Routes
 
-## Configure your own IMDb sources
+- `GET /` simple input form
+- `POST /api/create` create or refresh a feed from an IMDb URL
+- `GET /api/feeds/:slug` metadata for a generated feed
+- `GET /f/:slug.xml` Radarr-compatible RSS output
 
-Edit [config/lists.json](config/lists.json).
+## Local files you need to finish
 
-Each feed entry supports:
+- Update `wrangler.toml` with the real `database_id` after creating the D1 database
+- Provide valid Cloudflare credentials for `wrangler deploy`
 
-- `id`: lowercase slug used for the XML filename
-- `label`: display name for the dashboard
-- `sourceUrl`: a public IMDb custom list URL or public watchlist URL
-- `allowedTitleTypes`: which IMDb title types make it into the RSS feed
-- `maxItems`: hard cap on included items
-- `sampleFixture`: local HTML fixture used by `npm run build:sample`
-
-For Radarr, the safest default is to keep `allowedTitleTypes` set to `movie` and `tvMovie`.
-
-## Local usage
+## Local development
 
 ```bash
 npm install
-npm run build:sample
-npm run build
-npm start
+npm run check
+npm run dev
 ```
 
-`build:sample` uses local fixtures only. `build` hits live IMDb pages.
+For remote D1 migrations after the database exists:
 
-## GitHub Pages deployment
+```bash
+npm run db:migrate:remote
+```
 
-1. Push this repository to GitHub.
-2. In GitHub Pages settings, use **GitHub Actions** as the source.
-3. The `Refresh Pages` workflow will build and deploy the site.
-4. Copy the generated `feeds/<feed-id>.xml` URL into Radarr as an **RSS List** source.
+## Deployment
 
-## Notes
+This repo includes:
 
-- Public watchlists can resolve to an `ls...` list behind the scenes. The parser supports both watchlist and custom list structures.
-- IMDb can still hard-block particular runner IPs or change its internal data layout. When that happens, the dashboard will show the error instead of publishing an empty feed.
-- If you want more control over what Radarr sees, tighten `allowedTitleTypes` further or add more feed entries with different filters.
+- [ci.yml](.github/workflows/ci.yml) for fixture-based parser checks
+- [deploy-worker.yml](.github/workflows/deploy-worker.yml) for Worker deployment
+
+Set these GitHub repo secrets before using the deploy workflow:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+## Important note
+
+IMDb access is the tricky part of this whole project. The Worker is designed around Browser Run because direct fetches often hit IMDb bot protection. If Browser Run is not enabled on the account, or if Cloudflare still gets blocked by IMDb for a given request path, feed refreshes will fail and the feed endpoint will return the stored error until a later refresh succeeds.

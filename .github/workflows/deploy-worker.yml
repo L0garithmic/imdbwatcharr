@@ -1,13 +1,13 @@
-name: CI
+name: Deploy Worker
 
 on:
   push:
     branches:
       - main
-  pull_request:
+  workflow_dispatch:
 
 jobs:
-  parser-check:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,3 +25,9 @@ jobs:
 
       - name: Verify parser fixtures
         run: npm run check
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy

@@ -1,0 +1,14 @@
+name = "imdbwatcharr"
+main = "src/index.js"
+compatibility_date = "2026-04-15"
+compatibility_flags = ["nodejs_compat"]
+account_id = "eed9c6a3d77c18da26148d25e20ee951"
+workers_dev = true
+
+browser = { binding = "BROWSER" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "imdbwatcharr-db"
+database_id = "181ed2cd-f1f6-4ebb-8c51-9f1332d9d302"
+migrations_dir = "migrations"
