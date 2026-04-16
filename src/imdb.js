@@ -5,7 +5,8 @@ const NEXT_DATA_RE = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i;
 const TITLE_RE = /<title>([^<]+)<\/title>/i;
 const H1_RE = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
 
-export const ALLOWED_TITLE_TYPES = new Set(["movie", "tvMovie"]);
+export const MOVIE_TITLE_TYPES = new Set(["movie", "tvMovie"]);
+export const SERIES_TITLE_TYPES = new Set(["tvSeries", "tvMiniSeries"]);
 
 function htmlDecode(value) {
   return value
@@ -44,7 +45,7 @@ export function normalizeImdbUrl(input) {
   throw new Error("Enter a public IMDb list URL or public watchlist URL.");
 }
 
-export function buildPublicFeedPath(normalized) {
+function buildSourceFeedPath(normalized) {
   if (normalized.sourceKind === "watchlist") {
     return `/p/${normalized.sourceKey}`;
   }
@@ -56,14 +57,48 @@ export function buildPublicFeedPath(normalized) {
   throw new Error("Unsupported IMDb source type.");
 }
 
+export function buildPublicFeedPath(normalized, feedTarget = "radarr") {
+  const sourcePath = buildSourceFeedPath(normalized);
+  if (feedTarget === "radarr") {
+    return sourcePath;
+  }
+
+  if (feedTarget === "sonarr") {
+    return `/sonarr${sourcePath}`;
+  }
+
+  throw new Error("Unsupported feed target.");
+}
+
 export function getNormalizedFromStoredFeed(feed) {
   return normalizeImdbUrl(feed.source_url);
 }
 
 export function parseFeedRoute(pathname) {
+  const targetedRouteMatch = pathname.match(/^\/(radarr|sonarr)\/(p|l)\/([a-z0-9._-]+)\/?$/i);
+  if (targetedRouteMatch) {
+    const [, feedTarget, kind, sourceKey] = targetedRouteMatch;
+    if (kind.toLowerCase() === "p") {
+      return {
+        feedTarget: feedTarget.toLowerCase(),
+        canonicalUrl: `https://www.imdb.com/user/${sourceKey}/watchlist/`,
+        sourceKind: "watchlist",
+        sourceKey,
+      };
+    }
+
+    return {
+      feedTarget: feedTarget.toLowerCase(),
+      canonicalUrl: `https://www.imdb.com/list/${sourceKey}/`,
+      sourceKind: "list",
+      sourceKey,
+    };
+  }
+
   const watchlistMatch = pathname.match(/^\/p\/([a-z0-9._-]+)\/?$/i);
   if (watchlistMatch) {
     return {
+      feedTarget: "radarr",
       canonicalUrl: `https://www.imdb.com/user/${watchlistMatch[1]}/watchlist/`,
       sourceKind: "watchlist",
       sourceKey: watchlistMatch[1],
@@ -73,9 +108,30 @@ export function parseFeedRoute(pathname) {
   const listMatch = pathname.match(/^\/l\/(ls\d+)\/?$/i);
   if (listMatch) {
     return {
+      feedTarget: "radarr",
       canonicalUrl: `https://www.imdb.com/list/${listMatch[1]}/`,
       sourceKind: "list",
       sourceKey: listMatch[1],
+    };
+  }
+
+  const targetedGenericMatch = pathname.match(/^\/(radarr|sonarr)\/f\/((?:ls\d+)|(?:p\.[a-z0-9._-]+)|(?:ur[a-z0-9._-]+))\/?$/i);
+  if (targetedGenericMatch) {
+    const [, feedTarget, value] = targetedGenericMatch;
+    if (/^ls\d+$/i.test(value)) {
+      return {
+        feedTarget: feedTarget.toLowerCase(),
+        canonicalUrl: `https://www.imdb.com/list/${value}/`,
+        sourceKind: "list",
+        sourceKey: value,
+      };
+    }
+
+    return {
+      feedTarget: feedTarget.toLowerCase(),
+      canonicalUrl: `https://www.imdb.com/user/${value}/watchlist/`,
+      sourceKind: "watchlist",
+      sourceKey: value,
     };
   }
 
@@ -84,6 +140,7 @@ export function parseFeedRoute(pathname) {
     const value = genericMatch[1];
     if (/^ls\d+$/i.test(value)) {
       return {
+        feedTarget: "radarr",
         canonicalUrl: `https://www.imdb.com/list/${value}/`,
         sourceKind: "list",
         sourceKey: value,
@@ -91,6 +148,7 @@ export function parseFeedRoute(pathname) {
     }
 
     return {
+      feedTarget: "radarr",
       canonicalUrl: `https://www.imdb.com/user/${value}/watchlist/`,
       sourceKind: "watchlist",
       sourceKey: value,
@@ -213,8 +271,26 @@ export function parseImdbHtml(html) {
   throw new Error("Could not extract IMDb data from the fetched page.");
 }
 
-export function filterMovieItems(items) {
-  return items.filter((item) => ALLOWED_TITLE_TYPES.has(item.titleType));
+export function filterItemsForTarget(items, feedTarget = "radarr") {
+  const getTitleType = (item) => item.titleType ?? item.title_type ?? "unknown";
+
+  if (feedTarget === "radarr") {
+    return items.filter((item) => MOVIE_TITLE_TYPES.has(getTitleType(item)));
+  }
+
+  if (feedTarget === "sonarr") {
+    return items.filter((item) => SERIES_TITLE_TYPES.has(getTitleType(item)));
+  }
+
+  throw new Error("Unsupported feed target.");
+}
+
+export function summarizeItemsByTarget(items) {
+  return {
+    radarr: filterItemsForTarget(items, "radarr").length,
+    sonarr: filterItemsForTarget(items, "sonarr").length,
+    total: items.length,
+  };
 }
 
 export async function createStableSlug(text) {
@@ -224,7 +300,7 @@ export async function createStableSlug(text) {
   return hex.slice(0, 12);
 }
 
-export function buildFeedXml(origin, feed, items) {
+export function buildFeedXml(origin, feed, items, feedTarget = "radarr") {
   const escapeXml = (value) =>
     String(value)
       .replace(/&/g, "&amp;")
@@ -233,10 +309,12 @@ export function buildFeedXml(origin, feed, items) {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&apos;");
   const cdata = (value) => `<![CDATA[${String(value).replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
-  const feedUrl = `${origin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed))}`;
+  const feedUrl = `${origin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed), feedTarget)}`;
   const lastBuildDate = feed.last_synced_at ? new Date(feed.last_synced_at).toUTCString() : new Date().toUTCString();
   const sourceTitle = feed.list_title || "IMDb Feed";
-  const description = `${sourceTitle} on IMDb | ${items.length} included`;
+  const libraryName = feedTarget === "sonarr" ? "Sonarr" : "Radarr";
+  const feedTitle = `${sourceTitle} (${libraryName})`;
+  const description = `${sourceTitle} on IMDb | ${items.length} included for ${libraryName}`;
 
   const itemXml = items
     .map((item) => {
@@ -254,7 +332,7 @@ export function buildFeedXml(origin, feed, items) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>${cdata(sourceTitle)}</title>
+    <title>${cdata(feedTitle)}</title>
     <description>${cdata(description)}</description>
     <link>${escapeXml(feed.source_url)}</link>
     <atom:link href="${escapeXml(feedUrl)}" rel="self" type="application/rss+xml" />

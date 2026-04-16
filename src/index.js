@@ -3,11 +3,12 @@ import {
   buildFeedXml,
   buildPublicFeedPath,
   createStableSlug,
-  filterMovieItems,
+  filterItemsForTarget,
   getNormalizedFromStoredFeed,
   normalizeImdbUrl,
   parseFeedRoute,
   parseImdbHtml,
+  summarizeItemsByTarget,
 } from "./imdb.js";
 
 const STALE_AFTER_MS = 1000 * 60 * 60 * 6;
@@ -95,10 +96,10 @@ async function upsertFeed(db, normalized) {
 
 async function storeFeedSnapshot(db, feed, snapshot) {
   const timestamp = nowIso();
-  const keptItems = filterMovieItems(snapshot.items);
+  const storedItems = snapshot.items;
   const statements = [db.prepare("DELETE FROM feed_items WHERE feed_id = ?").bind(feed.id)];
 
-  for (const item of keptItems) {
+  for (const item of storedItems) {
     statements.push(
       db.prepare(
         `INSERT INTO feed_items (feed_id, imdb_id, position, title, year, title_type, added_at, created_at)
@@ -117,7 +118,7 @@ async function storeFeedSnapshot(db, feed, snapshot) {
       snapshot.listTitle || snapshot.sourceTitle,
       snapshot.listAuthor || "",
       snapshot.listId || "",
-      keptItems.length,
+      storedItems.length,
       timestamp,
       snapshot.lastSourceModifiedAt,
       timestamp,
@@ -132,7 +133,7 @@ async function storeFeedSnapshot(db, feed, snapshot) {
     list_author: snapshot.listAuthor || "",
     list_id: snapshot.listId || "",
     status: "ready",
-    item_count: keptItems.length,
+    item_count: storedItems.length,
     last_error: null,
     last_synced_at: timestamp,
     last_source_modified_at: snapshot.lastSourceModifiedAt,
@@ -283,6 +284,11 @@ function renderHomePage(origin) {
       word-break: break-word;
     }
     .error { color: #8a2c2c; }
+    .url-block {
+      margin-top: 0.9rem;
+      padding-top: 0.9rem;
+      border-top: 1px solid var(--line);
+    }
     code {
       font-family: Consolas, monospace;
       background: rgba(25,21,16,0.06);
@@ -295,15 +301,15 @@ function renderHomePage(origin) {
   <main>
     <section class="panel">
       <p style="margin:0 0 0.7rem;color:var(--accent-ink);font-weight:700;text-transform:uppercase;letter-spacing:0.12em;font-size:0.78rem;">Paste IMDb URL, get RSS URL</p>
-      <h1>IMDb watchlist to Radarr RSS.</h1>
-      <p>Paste a public IMDb watchlist or list URL. The Worker derives a deterministic RSS URL from the IMDb identifier, fetches the data, and caches the results for refreshes.</p>
+      <h1>IMDb to Radarr and Sonarr RSS.</h1>
+      <p>Paste a public IMDb watchlist or list URL. The Worker derives deterministic feed URLs from the IMDb identifier, fetches the data once, and then serves separate movie and TV feeds from the same source.</p>
       <form id="create-form">
         <input id="source-url" name="sourceUrl" placeholder="https://www.imdb.com/user/ur12345678/watchlist/" required>
         <button type="submit">Create Feed</button>
       </form>
       <div id="result" class="result"></div>
       <div id="error" class="error"></div>
-      <p style="margin-top:1rem;">Feed URLs look like <code>${origin}/p/profile-id</code> or <code>${origin}/l/ls123456789</code>.</p>
+      <p style="margin-top:1rem;">Movie feeds use <code>${origin}/p/profile-id</code> or <code>${origin}/l/ls123456789</code>. TV feeds use <code>${origin}/sonarr/p/profile-id</code> or <code>${origin}/sonarr/l/ls123456789</code>.</p>
     </section>
   </main>
   <script>
@@ -328,10 +334,14 @@ function renderHomePage(origin) {
 
         result.style.display = "block";
         result.innerHTML =
-          "<strong>RSS Feed URL</strong><br>" +
-          '<a href="' + payload.feedUrl + '" target="_blank" rel="noreferrer">' + payload.feedUrl + "</a><br><br>" +
+          '<div class="url-block"><strong>Radarr Feed URL</strong><br>' +
+          '<a href="' + payload.radarrFeedUrl + '" target="_blank" rel="noreferrer">' + payload.radarrFeedUrl + "</a></div>" +
+          '<div class="url-block"><strong>Sonarr Feed URL</strong><br>' +
+          '<a href="' + payload.sonarrFeedUrl + '" target="_blank" rel="noreferrer">' + payload.sonarrFeedUrl + "</a></div><br>" +
           "<strong>Status</strong><br>" + payload.status +
-          (payload.itemCount != null ? "<br><br><strong>Items</strong><br>" + payload.itemCount : "") +
+          (payload.radarrCount != null ? "<br><br><strong>Radarr Items</strong><br>" + payload.radarrCount : "") +
+          (payload.sonarrCount != null ? "<br><br><strong>Sonarr Items</strong><br>" + payload.sonarrCount : "") +
+          (payload.totalCount != null ? "<br><br><strong>Total IMDb Items</strong><br>" + payload.totalCount : "") +
           (payload.message ? "<br><br><strong>Message</strong><br>" + payload.message : "");
       } catch (error) {
         errorBox.style.display = "block";
@@ -358,13 +368,22 @@ export default {
         const normalized = normalizeImdbUrl(payload?.sourceUrl ?? "");
         const existing = await getOrCreateFeed(env.DB, normalized);
         const { feed, message } = await ensureFeedIsFresh(env, existing);
+        const items = await getFeedItems(env.DB, feed.id);
+        const counts = summarizeItemsByTarget(items);
 
         return json({
           slug: feed.slug,
-          routePath: buildPublicFeedPath(normalized),
-          feedUrl: `${publicOrigin}${buildPublicFeedPath(normalized)}`,
+          routePath: buildPublicFeedPath(normalized, "radarr"),
+          feedUrl: `${publicOrigin}${buildPublicFeedPath(normalized, "radarr")}`,
+          radarrRoutePath: buildPublicFeedPath(normalized, "radarr"),
+          radarrFeedUrl: `${publicOrigin}${buildPublicFeedPath(normalized, "radarr")}`,
+          sonarrRoutePath: buildPublicFeedPath(normalized, "sonarr"),
+          sonarrFeedUrl: `${publicOrigin}${buildPublicFeedPath(normalized, "sonarr")}`,
           status: feed.status,
-          itemCount: feed.item_count ?? 0,
+          itemCount: counts.radarr,
+          radarrCount: counts.radarr,
+          sonarrCount: counts.sonarr,
+          totalCount: counts.total,
           message,
         });
       } catch (error) {
@@ -372,8 +391,9 @@ export default {
       }
     }
 
-    const normalizedRoute = parseFeedRoute(url.pathname);
-    if ((request.method === "GET" || request.method === "HEAD") && normalizedRoute) {
+    const parsedRoute = parseFeedRoute(url.pathname);
+    if ((request.method === "GET" || request.method === "HEAD") && parsedRoute) {
+      const { feedTarget, ...normalizedRoute } = parsedRoute;
       let feed = await getOrCreateFeed(env.DB, normalizedRoute);
 
       if (feed.status !== "ready") {
@@ -391,7 +411,8 @@ export default {
         });
       }
 
-      const xml = buildFeedXml(publicOrigin, feed, items);
+      const filteredItems = filterItemsForTarget(items, feedTarget);
+      const xml = buildFeedXml(publicOrigin, feed, filteredItems, feedTarget);
       return new Response(xml, {
         headers: {
           "content-type": "application/rss+xml; charset=utf-8",
@@ -407,7 +428,7 @@ export default {
         return new Response("Feed not found.", { status: 404 });
       }
 
-      const redirectUrl = `${publicOrigin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed))}`;
+      const redirectUrl = `${publicOrigin}${buildPublicFeedPath(getNormalizedFromStoredFeed(feed), "radarr")}`;
       return Response.redirect(redirectUrl, 302);
     }
 
