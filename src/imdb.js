@@ -60,7 +60,7 @@ function buildSourceFeedPath(normalized) {
 export function buildPublicFeedPath(normalized, feedTarget = "radarr") {
   const sourcePath = buildSourceFeedPath(normalized);
   if (feedTarget === "radarr") {
-    return sourcePath;
+    return `/radarr${sourcePath}`;
   }
 
   if (feedTarget === "sonarr") {

@@ -42,6 +42,20 @@ function getPublicOrigin(request) {
   return request.headers.get("x-public-origin") || new URL(request.url).origin;
 }
 
+function getLegacyRedirectPath(pathname) {
+  const directMatch = pathname.match(/^\/(p|l)\/([a-z0-9._-]+)\/?$/i);
+  if (directMatch) {
+    return `/radarr/${directMatch[1].toLowerCase()}/${directMatch[2]}`;
+  }
+
+  const genericMatch = pathname.match(/^\/f\/((?:ls\d+)|(?:p\.[a-z0-9._-]+)|(?:ur[a-z0-9._-]+))\/?$/i);
+  if (genericMatch) {
+    return `/radarr/f/${genericMatch[1]}`;
+  }
+
+  return null;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -309,7 +323,8 @@ function renderHomePage(origin) {
       </form>
       <div id="result" class="result"></div>
       <div id="error" class="error"></div>
-      <p style="margin-top:1rem;">Movie feeds use <code>${origin}/p/profile-id</code> or <code>${origin}/l/ls123456789</code>. TV feeds use <code>${origin}/sonarr/p/profile-id</code> or <code>${origin}/sonarr/l/ls123456789</code>.</p>
+      <p style="margin-top:1rem;">Movie feeds use <code>${origin}/radarr/p/profile-id</code> or <code>${origin}/radarr/l/ls123456789</code>. TV feeds use <code>${origin}/sonarr/p/profile-id</code> or <code>${origin}/sonarr/l/ls123456789</code>.</p>
+      <p style="margin-top:0.6rem;font-size:0.95rem;">The <code>/sonarr</code> route is a TV-only RSS feed. Direct Sonarr import still needs TVDB-based identifiers, which this worker does not enrich yet.</p>
     </section>
   </main>
   <script>
@@ -389,6 +404,11 @@ export default {
       } catch (error) {
         return json({ error: error.message }, { status: 400 });
       }
+    }
+
+    const legacyRedirectPath = getLegacyRedirectPath(url.pathname);
+    if ((request.method === "GET" || request.method === "HEAD") && legacyRedirectPath) {
+      return Response.redirect(`${publicOrigin}${legacyRedirectPath}`, 302);
     }
 
     const parsedRoute = parseFeedRoute(url.pathname);

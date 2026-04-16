@@ -14,12 +14,12 @@ function assert(condition, message) {
 
 const listUrl = normalizeImdbUrl("https://www.imdb.com/list/ls008777572/?sort=list_order,asc");
 assert(listUrl.canonicalUrl === "https://www.imdb.com/list/ls008777572/", "List URL normalization failed.");
-assert(buildPublicFeedPath(listUrl) === "/l/ls008777572", "List feed path generation failed.");
+assert(buildPublicFeedPath(listUrl) === "/radarr/l/ls008777572", "List feed path generation failed.");
 assert(buildPublicFeedPath(listUrl, "sonarr") === "/sonarr/l/ls008777572", "List Sonarr path generation failed.");
 
 const watchlistUrl = normalizeImdbUrl("https://www.imdb.com/user/p.kdbeq6dtmzzpiin4k7t4fnunf4/watchlist");
 assert(watchlistUrl.canonicalUrl === "https://www.imdb.com/user/p.kdbeq6dtmzzpiin4k7t4fnunf4/watchlist/", "Watchlist URL normalization failed.");
-assert(buildPublicFeedPath(watchlistUrl) === "/p/p.kdbeq6dtmzzpiin4k7t4fnunf4", "Watchlist feed path generation failed.");
+assert(buildPublicFeedPath(watchlistUrl) === "/radarr/p/p.kdbeq6dtmzzpiin4k7t4fnunf4", "Watchlist feed path generation failed.");
 assert(buildPublicFeedPath(watchlistUrl, "sonarr") === "/sonarr/p/p.kdbeq6dtmzzpiin4k7t4fnunf4", "Watchlist Sonarr path generation failed.");
 
 const parsedListRoute = parseFeedRoute("/l/ls008777572");

@@ -11,9 +11,9 @@ Flow:
 
 Examples:
 
-- Radarr movie feed: `https://www.imdb.com/user/p.kdbeq6dtmzzpiin4k7t4fnunf4/watchlist/` becomes `https://imdbwatcharr.pages.dev/p/p.kdbeq6dtmzzpiin4k7t4fnunf4`
+- Radarr movie feed: `https://www.imdb.com/user/p.kdbeq6dtmzzpiin4k7t4fnunf4/watchlist/` becomes `https://imdbwatcharr.pages.dev/radarr/p/p.kdbeq6dtmzzpiin4k7t4fnunf4`
 - Sonarr TV feed: `https://www.imdb.com/user/p.kdbeq6dtmzzpiin4k7t4fnunf4/watchlist/` becomes `https://imdbwatcharr.pages.dev/sonarr/p/p.kdbeq6dtmzzpiin4k7t4fnunf4`
-- Radarr movie feed: `https://www.imdb.com/list/ls006123300/` becomes `https://imdbwatcharr.pages.dev/l/ls006123300`
+- Radarr movie feed: `https://www.imdb.com/list/ls006123300/` becomes `https://imdbwatcharr.pages.dev/radarr/l/ls006123300`
 - Sonarr TV feed: `https://www.imdb.com/list/ls006123300/` becomes `https://imdbwatcharr.pages.dev/sonarr/l/ls006123300`
 
 ## Architecture
@@ -28,12 +28,13 @@ Examples:
 
 - `GET /` simple input form
 - `POST /api/create` normalize an IMDb URL, create the feed record if needed, refresh it, and return both public RSS URLs
-- `GET /p/:profileId` dynamically serve the Radarr movie feed for a watchlist
-- `GET /l/:listId` dynamically serve the Radarr movie feed for a list
+- `GET /radarr/p/:profileId` dynamically serve the Radarr movie feed for a watchlist
+- `GET /radarr/l/:listId` dynamically serve the Radarr movie feed for a list
 - `GET /sonarr/p/:profileId` dynamically serve the Sonarr TV feed for a watchlist
 - `GET /sonarr/l/:listId` dynamically serve the Sonarr TV feed for a list
-- `GET /f/:imdbKey` optional generic Radarr route that infers the source from values like `ls...`, `p....`, or `ur...`
+- `GET /radarr/f/:imdbKey` optional generic Radarr route that infers the source from values like `ls...`, `p....`, or `ur...`
 - `GET /sonarr/f/:imdbKey` optional generic Sonarr route with the same inference rules
+- `GET /p/:profileId`, `GET /l/:listId`, and `GET /f/:imdbKey` are legacy shortcuts that redirect to `/radarr/...`
 - `GET /f/:slug.xml` legacy slug route that redirects to the deterministic path
 - `GET /api/feeds/:slug` internal metadata lookup for stored feed records
 
@@ -67,3 +68,5 @@ Required GitHub repo secrets:
 ## Important note
 
 IMDb access is the hardest part of the system. The Worker uses Cloudflare Browser Rendering because direct fetches often hit IMDb bot protection. If Browser Rendering is unavailable, or IMDb returns a challenge page, refreshes can fail temporarily and the feed endpoint will serve the last stored error or snapshot until a later refresh succeeds.
+
+The `/sonarr/...` route currently means "TV-only feed" rather than "fully Sonarr-native feed". The feed still emits IMDb IDs, and direct Sonarr RSS import expects TVDB-based identifiers, so additional ID enrichment would be needed before that route can be treated as true plug-and-play Sonarr support.
