@@ -1,7 +1,15 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPublicFeedPath, filterItemsForTarget, normalizeImdbUrl, parseFeedRoute, parseImdbHtml, summarizeItemsByTarget } from "../src/imdb.js";
+import {
+  buildPublicFeedPath,
+  buildSonarrCustomListPayload,
+  filterItemsForTarget,
+  normalizeImdbUrl,
+  parseFeedRoute,
+  parseImdbHtml,
+  summarizeItemsByTarget,
+} from "../src/imdb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -48,6 +56,13 @@ assert(filterItemsForTarget(parsedList.items, "radarr").length === 2, "List fixt
 assert(filterItemsForTarget(parsedList.items, "sonarr").length === 1, "List fixture should expose 1 series item for Sonarr.");
 const listCounts = summarizeItemsByTarget(parsedList.items);
 assert(listCounts.radarr === 2 && listCounts.sonarr === 1 && listCounts.total === 3, "List fixture count summary failed.");
+const sonarrPayload = buildSonarrCustomListPayload([
+  { title: "Game of Thrones", title_type: "tvSeries", tvdb_id: 121361 },
+  { title: "Forrest Gump", title_type: "movie", tvdb_id: 999999 },
+  { title: "Unknown Show", title_type: "tvSeries", tvdb_id: null },
+]);
+assert(sonarrPayload.length === 1, "Sonarr payload should only include TV items with TVDB IDs.");
+assert(sonarrPayload[0].Title === "Game of Thrones" && sonarrPayload[0].TvdbId === 121361, "Sonarr payload mapping failed.");
 
 const watchlistFixture = await readFile(path.join(rootDir, "fixtures", "imikedb-watchlist.html"), "utf8");
 const parsedWatchlist = parseImdbHtml(watchlistFixture);

@@ -293,6 +293,15 @@ export function summarizeItemsByTarget(items) {
   };
 }
 
+export function buildSonarrCustomListPayload(items) {
+  return filterItemsForTarget(items, "sonarr")
+    .filter((item) => Number.isInteger(item.tvdb_id) && item.tvdb_id > 0)
+    .map((item) => ({
+      Title: item.title,
+      TvdbId: item.tvdb_id,
+    }));
+}
+
 export async function createStableSlug(text) {
   const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
