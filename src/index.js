@@ -1,11 +1,15 @@
 import { launch } from "@cloudflare/playwright";
 import {
   buildFeedXml,
+  buildCachedFeedXmlTemplate,
   buildPublicFeedPath,
   buildSonarrCustomListPayload,
   createStableSlug,
+  extractImdbFingerprintPayload,
   filterItemsForTarget,
   getNormalizedFromStoredFeed,
+  hashText,
+  injectPublicOrigin,
   normalizeImdbUrl,
   parseFeedRoute,
   parseImdbHtml,
@@ -51,6 +55,30 @@ function nowIso() {
 
 function getPublicOrigin(request) {
   return request.headers.get("x-public-origin") || new URL(request.url).origin;
+}
+
+function buildFeedEtag(feed, feedTarget) {
+  if (!feed?.source_fingerprint) {
+    return null;
+  }
+
+  return `"${feed.source_fingerprint}-${feedTarget}"`;
+}
+
+function hasFreshEtag(request, etag) {
+  if (!etag) {
+    return false;
+  }
+
+  const ifNoneMatch = request.headers.get("if-none-match");
+  if (!ifNoneMatch) {
+    return false;
+  }
+
+  return ifNoneMatch
+    .split(",")
+    .map((value) => value.trim())
+    .some((value) => value === "*" || value === etag);
 }
 
 function getLegacyRedirectPath(pathname) {
@@ -166,12 +194,58 @@ async function storeFeedSnapshot(db, feed, snapshot) {
   };
 }
 
+async function storeFeedCaches(db, feed, items, sourceFingerprint) {
+  const timestamp = nowIso();
+  const radarrItems = filterItemsForTarget(items, "radarr");
+  const radarrCache = buildCachedFeedXmlTemplate(feed, radarrItems, "radarr");
+  const sonarrCache = JSON.stringify(buildSonarrCustomListPayload(items));
+
+  await db
+    .prepare(
+      `UPDATE feeds
+       SET source_fingerprint = ?, radarr_cache = ?, sonarr_cache = ?, cache_updated_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(sourceFingerprint, radarrCache, sonarrCache, timestamp, timestamp, feed.id)
+    .run();
+
+  return {
+    ...feed,
+    source_fingerprint: sourceFingerprint,
+    radarr_cache: radarrCache,
+    sonarr_cache: sonarrCache,
+    cache_updated_at: timestamp,
+    updated_at: timestamp,
+  };
+}
+
 async function markFeedFailure(db, feedId, error) {
   const timestamp = nowIso();
   await db
     .prepare("UPDATE feeds SET status = 'error', last_error = ?, updated_at = ? WHERE id = ?")
     .bind(String(error?.message ?? error), timestamp, feedId)
     .run();
+}
+
+async function markFeedUnchanged(db, feed, sourceFingerprint) {
+  const timestamp = nowIso();
+  await db
+    .prepare(
+      `UPDATE feeds
+       SET source_fingerprint = ?, status = 'ready', last_error = NULL, last_synced_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(sourceFingerprint, timestamp, timestamp, feed.id)
+    .run();
+
+  return {
+    ...feed,
+    source_fingerprint: sourceFingerprint,
+    status: "ready",
+    last_error: null,
+    last_synced_at: timestamp,
+    updated_at: timestamp,
+  };
 }
 
 async function fetchImdbHtmlDirect(sourceUrl) {
@@ -229,13 +303,28 @@ async function enrichTvdbIdsForFeed(env, feed, items) {
   return getFeedItems(env.DB, feed.id);
 }
 
+async function syncFeedFromHtml(env, feed, htmlText) {
+  const sourceFingerprint = await hashText(extractImdbFingerprintPayload(htmlText), 32);
+
+  if (sourceFingerprint === feed.source_fingerprint && feed.radarr_cache && feed.sonarr_cache) {
+    return markFeedUnchanged(env.DB, feed, sourceFingerprint);
+  }
+
+  const parsed = parseImdbHtml(htmlText);
+  let currentFeed = await storeFeedSnapshot(env.DB, feed, parsed);
+  let items = await getFeedItems(env.DB, currentFeed.id);
+  items = await enrichTvdbIdsForFeed(env, currentFeed, items);
+  currentFeed = await storeFeedCaches(env.DB, currentFeed, items, sourceFingerprint);
+
+  return currentFeed;
+}
+
 async function syncFeed(env, feed) {
   await env.DB.prepare("UPDATE feeds SET status = 'syncing', updated_at = ? WHERE id = ?").bind(nowIso(), feed.id).run();
 
   try {
     const htmlText = await fetchImdbHtmlDirect(feed.source_url);
-    const parsed = parseImdbHtml(htmlText);
-    return await storeFeedSnapshot(env.DB, feed, parsed);
+    return await syncFeedFromHtml(env, feed, htmlText);
   } catch {}
 
   let lastError = null;
@@ -254,9 +343,8 @@ async function syncFeed(env, feed) {
 
       await page.waitForTimeout(3000);
       const htmlText = await page.content();
-      const parsed = parseImdbHtml(htmlText);
       await browser.close();
-      return await storeFeedSnapshot(env.DB, feed, parsed);
+      return await syncFeedFromHtml(env, feed, htmlText);
     } catch (error) {
       lastError = error;
       try {
@@ -512,12 +600,43 @@ export default {
         });
       }
 
+      const etag = buildFeedEtag(feed, feedTarget);
+      const baseHeaders = {
+        "cache-control": "public, max-age=300",
+        ...(etag ? { etag } : {}),
+      };
+
+      if (hasFreshEtag(request, etag)) {
+        return new Response(null, {
+          status: 304,
+          headers: baseHeaders,
+        });
+      }
+
       if (feedTarget === "sonarr") {
+        if (feed.sonarr_cache) {
+          return new Response(feed.sonarr_cache, {
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              ...baseHeaders,
+            },
+          });
+        }
+
         const enrichedItems = await enrichTvdbIdsForFeed(env, feed, items);
         const payload = buildSonarrCustomListPayload(enrichedItems);
         return json(payload, {
           headers: {
-            "cache-control": "public, max-age=300",
+            ...baseHeaders,
+          },
+        });
+      }
+
+      if (feed.radarr_cache) {
+        return new Response(injectPublicOrigin(feed.radarr_cache, publicOrigin), {
+          headers: {
+            "content-type": "application/rss+xml; charset=utf-8",
+            ...baseHeaders,
           },
         });
       }
@@ -527,7 +646,7 @@ export default {
       return new Response(xml, {
         headers: {
           "content-type": "application/rss+xml; charset=utf-8",
-          "cache-control": "public, max-age=300",
+          ...baseHeaders,
         },
       });
     }

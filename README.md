@@ -20,10 +20,10 @@ Examples:
 
 - Cloudflare Worker serves the UI, API, and RSS generation logic
 - Cloudflare Pages exposes the public `pages.dev` hostname and proxies requests to the Worker
-- D1 stores feed metadata plus the last successful snapshot of all IMDb items and any resolved TVDB IDs
+- D1 stores feed metadata plus the last successful snapshot of all IMDb items, any resolved TVDB IDs, and cached Radarr/Sonarr payloads
 - Browser Rendering fetches IMDb pages and lets the parser extract data from stable page payloads such as `#__NEXT_DATA__`
 - The Worker tries a direct IMDb fetch first and only falls back to Browser Rendering when needed
-- Radarr RSS and Sonarr Custom List responses are generated dynamically when a deterministic route is requested
+- The Worker fingerprints the stable IMDb payload block instead of the whole HTML page, so unchanged lists can reuse the cached Radarr RSS or Sonarr JSON response without rebuilding it
 
 ## Routes
 
@@ -71,3 +71,5 @@ Required GitHub repo secrets:
 IMDb access is the hardest part of the system. The Worker now tries a direct HTTP fetch first because it is lighter and avoids Browser Rendering rate limits in the common case. If IMDb returns a challenge page, the Worker falls back to Browser Rendering. If both fail, the route serves the last stored error or snapshot until a later refresh succeeds.
 
 The `/sonarr/...` route is now designed for Sonarr's `Custom List` provider, which expects JSON entries with `TvdbId`. TVDB IDs are resolved from IMDb IDs through TVMaze when possible, so some IMDb TV entries may be skipped if no TVDB mapping is available.
+
+When IMDb does respond, the Worker hashes the stable list payload extracted from the page. If that fingerprint has not changed, it keeps serving the cached list body with `ETag` headers so Radarr, Sonarr, and any upstream cache can avoid re-downloading the full payload unnecessarily.

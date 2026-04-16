@@ -3,8 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildPublicFeedPath,
+  buildCachedFeedXmlTemplate,
   buildSonarrCustomListPayload,
+  extractImdbFingerprintPayload,
   filterItemsForTarget,
+  hashText,
+  injectPublicOrigin,
   normalizeImdbUrl,
   parseFeedRoute,
   parseImdbHtml,
@@ -63,11 +67,26 @@ const sonarrPayload = buildSonarrCustomListPayload([
 ]);
 assert(sonarrPayload.length === 1, "Sonarr payload should only include TV items with TVDB IDs.");
 assert(sonarrPayload[0].Title === "Game of Thrones" && sonarrPayload[0].TvdbId === 121361, "Sonarr payload mapping failed.");
+const listFingerprintPayload = extractImdbFingerprintPayload(listFixture);
+assert(listFingerprintPayload.includes('"parserMode":"next-data"'), "Fingerprint payload should prefer the structured IMDb payload.");
+const fingerprintHash = await hashText(listFingerprintPayload, 16);
+assert(/^[a-f0-9]{16}$/.test(fingerprintHash), "Fingerprint hash should be a stable hex digest.");
 
 const watchlistFixture = await readFile(path.join(rootDir, "fixtures", "imikedb-watchlist.html"), "utf8");
 const parsedWatchlist = parseImdbHtml(watchlistFixture);
 assert(parsedWatchlist.items.length === 3, "Watchlist fixture should expose 3 items.");
 assert(filterItemsForTarget(parsedWatchlist.items, "radarr").length === 3, "Watchlist fixture should keep all sample items for Radarr.");
 assert(filterItemsForTarget(parsedWatchlist.items, "sonarr").length === 0, "Watchlist fixture should expose no series items for Sonarr.");
+const cachedXmlTemplate = buildCachedFeedXmlTemplate(
+  {
+    source_url: listUrl.canonicalUrl,
+    list_title: "Top 35 Movies For Public",
+    last_synced_at: "2026-04-15T12:00:00.000Z",
+  },
+  filterItemsForTarget(parsedList.items, "radarr"),
+);
+assert(cachedXmlTemplate.includes("__IMDBWATCHARR_PUBLIC_ORIGIN__"), "Cached XML should preserve the public-origin placeholder.");
+const injectedXml = injectPublicOrigin(cachedXmlTemplate, "https://imdbwatcharr.pages.dev");
+assert(injectedXml.includes("https://imdbwatcharr.pages.dev/radarr/l/ls008777572"), "Public origin injection should produce the final route.");
 
 console.log("Parser checks passed.");

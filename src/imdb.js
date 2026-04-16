@@ -7,6 +7,7 @@ const H1_RE = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
 
 export const MOVIE_TITLE_TYPES = new Set(["movie", "tvMovie"]);
 export const SERIES_TITLE_TYPES = new Set(["tvSeries", "tvMiniSeries"]);
+const ORIGIN_PLACEHOLDER = "__IMDBWATCHARR_PUBLIC_ORIGIN__";
 
 function htmlDecode(value) {
   return value
@@ -201,6 +202,53 @@ function parseJsonLd(html) {
   return null;
 }
 
+export function extractImdbFingerprintPayload(html) {
+  const nextDataMatch = html.match(NEXT_DATA_RE);
+
+  if (nextDataMatch) {
+    try {
+      const nextData = JSON.parse(nextDataMatch[1]);
+      const pageProps = nextData?.props?.pageProps ?? {};
+      const mainColumnData = pageProps?.mainColumnData ?? {};
+      const listContainer = mainColumnData?.list?.titleListItemSearch ?? mainColumnData?.predefinedList?.titleListItemSearch;
+
+      if (Array.isArray(listContainer?.edges)) {
+        const above = pageProps?.aboveTheFoldData ?? {};
+        const items = listContainer.edges.map((edge, index) => {
+          const listItem = edge?.listItem ?? {};
+          return {
+            imdbId: listItem?.id ?? null,
+            title: listItem?.titleText?.text ?? listItem?.originalTitleText?.text ?? null,
+            year: listItem?.releaseYear?.year ?? listItem?.releaseDate?.year ?? null,
+            titleType: listItem?.titleType?.id ?? null,
+            position: Number(edge?.node?.absolutePosition ?? index + 1),
+            addedAt: edge?.node?.createdDate ?? null,
+          };
+        });
+
+        return JSON.stringify({
+          parserMode: "next-data",
+          listId: above?.listId ?? null,
+          lastModifiedDate: above?.lastModifiedDate ?? null,
+          total: Number(listContainer?.total ?? items.length),
+          items,
+        });
+      }
+    } catch {}
+  }
+
+  const ldItems = parseJsonLd(html);
+  if (ldItems?.length) {
+    return JSON.stringify({
+      parserMode: "json-ld",
+      total: ldItems.length,
+      items: ldItems,
+    });
+  }
+
+  return html;
+}
+
 export function parseImdbHtml(html) {
   const nextDataMatch = html.match(NEXT_DATA_RE);
   const title = stripTags(html.match(TITLE_RE)?.[1] ?? "");
@@ -309,6 +357,13 @@ export async function createStableSlug(text) {
   return hex.slice(0, 12);
 }
 
+export async function hashText(text, length = 64) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return hex.slice(0, length);
+}
+
 export function buildFeedXml(origin, feed, items, feedTarget = "radarr") {
   const escapeXml = (value) =>
     String(value)
@@ -350,4 +405,12 @@ ${itemXml}
   </channel>
 </rss>
 `;
+}
+
+export function buildCachedFeedXmlTemplate(feed, items, feedTarget = "radarr") {
+  return buildFeedXml(ORIGIN_PLACEHOLDER, feed, items, feedTarget);
+}
+
+export function injectPublicOrigin(template, origin) {
+  return String(template).replaceAll(ORIGIN_PLACEHOLDER, origin);
 }
